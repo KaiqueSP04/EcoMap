@@ -1,3 +1,5 @@
+import { getOccurrences } from '@/services/occurrences';
+import type { Occurrence } from '@/types/occurrence';
 import { router } from 'expo-router';
 import { useEffect, useState } from 'react';
 import {
@@ -9,13 +11,6 @@ import {
   View,
 } from 'react-native';
 
-type Occurrence = {
-  id: number;
-  category: string;
-  description: string;
-  status: string;
-};
-
 export default function OccurrencesScreen() {
   const [occurrences, setOccurrences] = useState<Occurrence[]>([]);
   const [loading, setLoading] = useState(true);
@@ -24,15 +19,7 @@ export default function OccurrencesScreen() {
     try {
       setLoading(true);
 
-      const response = await fetch(
-        'http://192.168.1.103:8000/occurrences'
-      );
-
-      if (!response.ok) {
-        throw new Error('Erro ao buscar ocorrências.');
-      }
-
-      const data = await response.json();
+      const data = await getOccurrences();
 
       setOccurrences(data);
     } catch (error) {

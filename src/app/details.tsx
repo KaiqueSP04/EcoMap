@@ -1,3 +1,5 @@
+import { getOccurrences } from '@/services/occurrences';
+import type { Occurrence } from '@/types/occurrence';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useEffect, useState } from 'react';
 import {
@@ -7,13 +9,6 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-
-type Occurrence = {
-  id: number;
-  category: string;
-  description: string;
-  status: string;
-};
 
 export default function DetailsScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -25,15 +20,7 @@ export default function DetailsScreen() {
 
   async function loadOccurrence() {
     try {
-      const response = await fetch(
-        'http://192.168.1.103:8000/occurrences'
-      );
-
-      if (!response.ok) {
-        throw new Error('Erro ao buscar ocorrências.');
-      }
-
-      const data: Occurrence[] = await response.json();
+      const data = await getOccurrences();
 
       const selectedOccurrence = data.find(
         (item) => item.id === Number(id)

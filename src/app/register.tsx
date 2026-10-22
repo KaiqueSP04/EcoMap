@@ -1,3 +1,4 @@
+import { createOccurrence } from '@/services/occurrences';
 import { router } from 'expo-router';
 import { useState } from 'react';
 import {
@@ -26,29 +27,7 @@ export default function RegisterScreen() {
     try {
       setLoading(true);
 
-      const response = await fetch(
-        'http://192.168.1.103:8000/occurrences',
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            category,
-            description,
-          }),
-        }
-      );
-
-      const responseText = await response.text();
-
-      if (!response.ok) {
-        throw new Error(
-          `HTTP ${response.status}: ${responseText}`
-        );
-      }
-
-      const data = JSON.parse(responseText);
+      const data = await createOccurrence({ category, description });
 
       Alert.alert(
         'Ocorrência registrada',
