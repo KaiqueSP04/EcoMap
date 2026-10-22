@@ -41,3 +41,49 @@ example
 # generated native folders
 /ios
 /android
+
+backend/.env
+
+# Environment secrets (keep sanitized templates versionable)
+.env
+.env.*
+!.env.example
+!.env.sample
+!.env.template
+
+# Python environments and caches
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local logs and temporary files
+*.log
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+Thumbs.db
+
+# Local database files and backups
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+*.sqlite-*
+*.sqlite3-*
+*.dump
+*.backup
+/backend/pgdata/
+/backend/backups/
+
+# Local tool settings and credentials
+.claude/settings.local.json
+.aws/
