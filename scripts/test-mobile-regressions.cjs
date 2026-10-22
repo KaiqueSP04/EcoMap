@@ -107,6 +107,104 @@ test('list parses two rows; successful [] is the only empty-list response', asyn
   }
 });
 
+function summaryValues(screen) {
+  return screen.nodes()
+    .filter(node => node.type === 'Text' && (
+      typeof node.props.children === 'number'
+      || node.props.children === '…' || node.props.children === '—'
+    ))
+    .map(node => node.props.children);
+}
+
+test('summary counts total registered and exact analysis/resolved statuses without mutating rows', () => {
+  const { summarizeOccurrences } = services(() => assert.fail('Summary must not request data')).occurrences;
+  const statuses = ['Registrada', 'Em análise', 'Em análise', 'Resolvida', 'Outro status'];
+  const rows = Object.freeze(statuses.map((status, index) => Object.freeze({ ...row, id: index + 1, status })));
+  const summary = summarizeOccurrences(rows);
+  assert.equal(summary.registered, 5);
+  assert.equal(summary.inAnalysis, 2);
+  assert.equal(summary.resolved, 1);
+  const empty = summarizeOccurrences([]);
+  assert.equal(empty.registered, 0);
+  assert.equal(empty.inAnalysis, 0);
+  assert.equal(empty.resolved, 0);
+});
+
+test('home requests once per focus and updates all counters from the existing endpoint', async () => {
+  let rows = [row, { ...row, id: 3, status: 'Resolvida' }, { ...row, id: 4, status: 'Em análise' }];
+  let calls = 0;
+  const api = services(async (url, options) => {
+    calls++;
+    assert.equal(url, config.API_BASE_URL + '/occurrences');
+    assert.equal(options.method, undefined);
+    return response(rows);
+  }).occurrences;
+  const screen = screenHarness('src/app/index.tsx', api);
+  screen.render();
+  assert.match(screen.text(), /Carregando resumo/);
+  assert.deepEqual(summaryValues(screen), ['…', '…', '…']);
+  await screen.settle();
+  assert.deepEqual(summaryValues(screen), [3, 1, 1]);
+  assert.equal(calls, 1);
+  rows = [...rows, { ...row, id: 5 }];
+  await screen.refocus();
+  assert.deepEqual(summaryValues(screen), [4, 1, 1]);
+  assert.equal(calls, 2);
+});
+
+test('home shows actual zeros only after successful empty response', async () => {
+  const api = services(async () => response([])).occurrences;
+  const screen = screenHarness('src/app/index.tsx', api);
+  await screen.settle();
+  assert.deepEqual(summaryValues(screen), [0, 0, 0]);
+  assert.doesNotMatch(screen.text(), /Tentar novamente|Carregando resumo/);
+});
+
+test('home network failure hides numbers and retry restores counts; failed refresh hides stale values', async () => {
+  let failed = true, calls = 0;
+  const api = services(async () => {
+    calls++;
+    if (failed) throw new TypeError('Network request failed');
+    return response([row, { ...row, id: 3 }]);
+  }).occurrences;
+  const screen = screenHarness('src/app/index.tsx', api);
+  await screen.settle();
+  assert.match(screen.text(), /conectar à API/);
+  assert.deepEqual(summaryValues(screen), ['—', '—', '—']);
+  failed = false;
+  await screen.press('Tentar novamente');
+  await screen.settle();
+  assert.deepEqual(summaryValues(screen), [2, 0, 0]);
+  assert.equal(calls, 2);
+  failed = true;
+  await screen.refocus();
+  assert.deepEqual(summaryValues(screen), ['—', '—', '—']);
+  assert.equal(calls, 3);
+});
+
+test('home rejects malformed lists and ignores an old response after losing focus', async () => {
+  const malformedApi = services(async () => response({ detail: 'unexpected' })).occurrences;
+  const malformed = screenHarness('src/app/index.tsx', malformedApi);
+  await malformed.settle();
+  assert.deepEqual(summaryValues(malformed), ['—', '—', '—']);
+  assert.match(malformed.text(), /inválida/);
+
+  let resolveOld, calls = 0;
+  const api = services(() => {
+    calls++;
+    if (calls === 1) return new Promise(resolve => { resolveOld = resolve; });
+    return Promise.resolve(response([row]));
+  }).occurrences;
+  const screen = screenHarness('src/app/index.tsx', api);
+  screen.render();
+  screen.blur();
+  await screen.refocus();
+  assert.deepEqual(summaryValues(screen), [1, 0, 0]);
+  resolveOld(response([row, { ...row, id: 3 }]));
+  await screen.settle();
+  assert.deepEqual(summaryValues(screen), [1, 0, 0]);
+});
+
 test('network, HTTP, JSON and timeout failures reject instead of returning []', async () => {
   await assert.rejects(services(async () => { throw new TypeError('network'); }).occurrences.getOccurrences(), /conectar à API/);
   await assert.rejects(services(async () => response({}, 500)).occurrences.getOccurrences(), /HTTP 500/);

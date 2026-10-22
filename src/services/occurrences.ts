@@ -1,5 +1,15 @@
 import { requestJson } from '@/services/http';
-import type { Occurrence, OccurrenceCreate } from '@/types/occurrence';
+import type { Occurrence, OccurrenceCreate, OccurrenceSummary } from '@/types/occurrence';
+
+export function summarizeOccurrences(occurrences: readonly Occurrence[]): OccurrenceSummary {
+  // Registered is the total submitted, including occurrences whose status has changed.
+  const summary = { registered: occurrences.length, inAnalysis: 0, resolved: 0 };
+  for (const occurrence of occurrences) {
+    if (occurrence.status === 'Em análise') summary.inAnalysis++;
+    if (occurrence.status === 'Resolvida') summary.resolved++;
+  }
+  return summary;
+}
 
 function isOccurrence(value: unknown): value is Occurrence {
   if (!value || typeof value !== 'object') return false;

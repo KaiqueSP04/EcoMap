@@ -15,3 +15,9 @@ export type OccurrenceCreate = {
   longitude?: number | null;
   photo_path?: string | null;
 };
+
+export type OccurrenceSummary = {
+  registered: number;
+  inAnalysis: number;
+  resolved: number;
+};

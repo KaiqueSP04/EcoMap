@@ -1,7 +1,34 @@
-import { router } from 'expo-router';
+import { getOccurrences, summarizeOccurrences } from '@/services/occurrences';
+import type { OccurrenceSummary } from '@/types/occurrence';
+import { router, useFocusEffect } from 'expo-router';
+import { useCallback, useState } from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
 export default function HomeScreen() {
+  const [summary, setSummary] = useState<OccurrenceSummary | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
+
+  useFocusEffect(useCallback(() => {
+    let active = true;
+    async function loadSummary() {
+      setLoading(true);
+      setError(null);
+      setSummary(null);
+      try {
+        const occurrences = await getOccurrences();
+        if (active) setSummary(summarizeOccurrences(occurrences));
+      } catch (error) {
+        if (active) setError(error instanceof Error ? error.message : 'Não foi possível carregar o resumo.');
+      } finally {
+        if (active) setLoading(false);
+      }
+    }
+    void loadSummary();
+    return () => { active = false; };
+  }, [attempt]));
+
   return (
     <View style={styles.container}>
       <View style={styles.header}>
@@ -50,20 +77,29 @@ export default function HomeScreen() {
 
         <View style={styles.statsContainer}>
           <View style={styles.statCard}>
-            <Text style={styles.statNumber}>0</Text>
+            <Text style={styles.statNumber}>{loading ? '…' : summary?.registered ?? '—'}</Text>
             <Text style={styles.statLabel}>Registradas</Text>
           </View>
 
           <View style={styles.statCard}>
-            <Text style={styles.statNumber}>0</Text>
+            <Text style={styles.statNumber}>{loading ? '…' : summary?.inAnalysis ?? '—'}</Text>
             <Text style={styles.statLabel}>Em análise</Text>
           </View>
 
           <View style={styles.statCard}>
-            <Text style={styles.statNumber}>0</Text>
+            <Text style={styles.statNumber}>{loading ? '…' : summary?.resolved ?? '—'}</Text>
             <Text style={styles.statLabel}>Resolvidas</Text>
           </View>
         </View>
+        {loading && <Text style={styles.summaryMessage}>Carregando resumo...</Text>}
+        {error && (
+          <View>
+            <Text style={styles.summaryMessage}>{error}</Text>
+            <TouchableOpacity style={styles.summaryRetry} onPress={() => setAttempt(value => value + 1)}>
+              <Text style={styles.summaryRetryText}>Tentar novamente</Text>
+            </TouchableOpacity>
+          </View>
+        )}
       </View>
 
       <Text style={styles.footer}>
@@ -74,6 +110,9 @@ export default function HomeScreen() {
 }
 
 const styles = StyleSheet.create({
+  summaryMessage: { color: '#94A3B8', fontSize: 13, marginTop: 10 },
+  summaryRetry: { paddingVertical: 10, alignSelf: 'flex-start' },
+  summaryRetryText: { color: '#60A5FA', fontSize: 14, fontWeight: '600' },
   container: {
     flex: 1,
     backgroundColor: '#0B1220',
