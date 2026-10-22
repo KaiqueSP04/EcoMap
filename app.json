@@ -26,6 +26,22 @@
     "plugins": [
       "expo-router",
       [
+        "expo-image-picker",
+        {
+          "photosPermission": "Permita selecionar uma foto para registrar a ocorrência ambiental.",
+          "cameraPermission": "Permita usar a câmera para fotografar a ocorrência ambiental.",
+          "microphonePermission": false
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Permita obter a localização da ocorrência durante o uso do EcoMap.",
+          "isIosBackgroundLocationEnabled": false,
+          "isAndroidBackgroundLocationEnabled": false
+        }
+      ],
+      [
         "expo-splash-screen",
         {
           "backgroundColor": "#208AEF",

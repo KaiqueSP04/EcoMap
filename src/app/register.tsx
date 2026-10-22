@@ -1,8 +1,13 @@
 import { createOccurrence } from '@/services/occurrences';
+import { uploadPhoto } from '@/services/photos';
+import { useOccurrenceEvidence } from '@/hooks/use-occurrence-evidence';
 import { router } from 'expo-router';
 import { useState } from 'react';
 import {
   Alert,
+  ActivityIndicator,
+  Image,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -14,8 +19,16 @@ export default function RegisterScreen() {
   const [category, setCategory] = useState('Calçada');
   const [description, setDescription] = useState('');
   const [loading, setLoading] = useState(false);
+  const [uploadedPhoto, setUploadedPhoto] = useState<{ uri: string; path: string } | null>(null);
+  const evidence = useOccurrenceEvidence();
+  const busy = loading || evidence.selectingPhoto || evidence.locating;
 
   async function handleRegister() {
+    if (busy) return;
+    if (!category.trim()) {
+      Alert.alert('Categoria obrigatória', 'Selecione uma categoria.');
+      return;
+    }
     if (!description.trim()) {
       Alert.alert(
         'Descrição obrigatória',
@@ -27,7 +40,19 @@ export default function RegisterScreen() {
     try {
       setLoading(true);
 
-      const data = await createOccurrence({ category, description });
+      let photoPath: string | undefined;
+      if (evidence.photo) {
+        photoPath = uploadedPhoto?.uri === evidence.photo.uri
+          ? uploadedPhoto.path
+          : await uploadPhoto(evidence.photo);
+        setUploadedPhoto({ uri: evidence.photo.uri, path: photoPath });
+      }
+      const data = await createOccurrence({
+        category,
+        description,
+        ...(evidence.coordinates ?? {}),
+        ...(photoPath ? { photo_path: photoPath } : {}),
+      });
 
       Alert.alert(
         'Ocorrência registrada',
@@ -41,6 +66,9 @@ export default function RegisterScreen() {
       );
 
       setDescription('');
+      evidence.removePhoto();
+      evidence.removeLocation();
+      setUploadedPhoto(null);
     } catch (error) {
       console.log('ERRO AO REGISTRAR:', error);
 
@@ -54,7 +82,7 @@ export default function RegisterScreen() {
   }
 
   return (
-    <View style={styles.container}>
+    <ScrollView style={styles.container} contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
       <Text style={styles.title}>Registrar ocorrência</Text>
 
       <Text style={styles.subtitle}>
@@ -71,6 +99,7 @@ export default function RegisterScreen() {
               : styles.option
           }
           onPress={() => setCategory('Calçada')}
+          disabled={loading}
         >
           <Text
             style={
@@ -90,6 +119,7 @@ export default function RegisterScreen() {
               : styles.option
           }
           onPress={() => setCategory('Árvore')}
+          disabled={loading}
         >
           <Text
             style={
@@ -109,6 +139,7 @@ export default function RegisterScreen() {
               : styles.option
           }
           onPress={() => setCategory('Área verde')}
+          disabled={loading}
         >
           <Text
             style={
@@ -131,28 +162,46 @@ export default function RegisterScreen() {
         multiline
         value={description}
         onChangeText={setDescription}
+        editable={!loading}
       />
 
-      <Text style={styles.label}>Evidências</Text>
+      <Text style={styles.label}>Evidências (opcionais)</Text>
 
-      <TouchableOpacity style={styles.actionButton}>
+      <TouchableOpacity style={styles.actionButton} disabled={busy} onPress={() => evidence.selectPhoto(false)}>
         <Text style={styles.actionIcon}>+</Text>
 
         <View style={styles.actionContent}>
           <Text style={styles.actionTitle}>Adicionar foto</Text>
 
           <Text style={styles.actionSubtitle}>
-            Inclua uma imagem da ocorrência
+            JPEG, PNG ou WebP de até 8 MB
           </Text>
         </View>
       </TouchableOpacity>
 
-      <TouchableOpacity style={styles.actionButton}>
+      <TouchableOpacity style={styles.actionButton} disabled={busy} onPress={() => evidence.selectPhoto(true)}>
+        <Text style={styles.actionIcon}>+</Text>
+        <View style={styles.actionContent}>
+          <Text style={styles.actionTitle}>Tirar foto</Text>
+          <Text style={styles.actionSubtitle}>Use a câmera do aparelho</Text>
+        </View>
+      </TouchableOpacity>
+      {evidence.selectingPhoto && <ActivityIndicator color="#4ADE80" />}
+      {evidence.photo && (
+        <View>
+          <Image source={{ uri: evidence.photo.uri }} style={styles.photoPreview} resizeMode="cover" />
+          <TouchableOpacity disabled={loading} onPress={evidence.removePhoto} style={styles.removeButton}>
+            <Text style={styles.backText}>Remover foto</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
+      <TouchableOpacity style={styles.actionButton} disabled={busy} onPress={evidence.locate}>
         <Text style={styles.actionIcon}>●</Text>
 
         <View style={styles.actionContent}>
           <Text style={styles.actionTitle}>
-            Adicionar localização
+            {evidence.locating ? 'Obtendo localização...' : 'Adicionar localização'}
           </Text>
 
           <Text style={styles.actionSubtitle}>
@@ -160,14 +209,25 @@ export default function RegisterScreen() {
           </Text>
         </View>
       </TouchableOpacity>
+      {evidence.locating && <ActivityIndicator color="#4ADE80" />}
+      {evidence.coordinates && (
+        <View>
+          <Text style={styles.coordinates}>
+            {evidence.coordinates.latitude.toFixed(6)}, {evidence.coordinates.longitude.toFixed(6)}
+          </Text>
+          <TouchableOpacity disabled={loading} onPress={evidence.removeLocation} style={styles.removeButton}>
+            <Text style={styles.backText}>Remover localização</Text>
+          </TouchableOpacity>
+        </View>
+      )}
 
       <TouchableOpacity
         style={[
           styles.submitButton,
-          loading && styles.submitButtonDisabled,
+          busy && styles.submitButtonDisabled,
         ]}
         onPress={handleRegister}
-        disabled={loading}
+        disabled={busy}
       >
         <Text style={styles.submitText}>
           {loading ? 'Registrando...' : 'Registrar ocorrência'}
@@ -176,15 +236,20 @@ export default function RegisterScreen() {
 
       <TouchableOpacity
         style={styles.backButton}
+        disabled={loading}
         onPress={() => router.back()}
       >
         <Text style={styles.backText}>Voltar</Text>
       </TouchableOpacity>
-    </View>
+    </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
+  scrollContent: { paddingBottom: 90 },
+  photoPreview: { width: '100%', height: 180, borderRadius: 12, marginTop: 8 },
+  removeButton: { paddingVertical: 12, alignItems: 'center' },
+  coordinates: { color: '#CBD5E1', marginTop: 8 },
   container: {
     flex: 1,
     backgroundColor: '#0B1220',

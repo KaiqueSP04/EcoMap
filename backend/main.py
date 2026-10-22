@@ -2,9 +2,11 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from routes import router
+from upload_limits import UploadSizeLimit
 
 
 app = FastAPI(title="EcoMap API")
+app.add_middleware(UploadSizeLimit)
 
 
 app.add_middleware(

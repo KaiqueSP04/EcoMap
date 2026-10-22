@@ -1,7 +1,7 @@
 import { getOccurrences } from '@/services/occurrences';
 import type { Occurrence } from '@/types/occurrence';
-import { router } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { router, useFocusEffect } from 'expo-router';
+import { useCallback, useState } from 'react';
 import {
   ActivityIndicator,
   ScrollView,
@@ -14,24 +14,26 @@ import {
 export default function OccurrencesScreen() {
   const [occurrences, setOccurrences] = useState<Occurrence[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
 
-  async function loadOccurrences() {
-    try {
+  useFocusEffect(useCallback(() => {
+    let active = true;
+    async function loadOccurrences() {
       setLoading(true);
-
-      const data = await getOccurrences();
-
-      setOccurrences(data);
-    } catch (error) {
-      console.log('ERRO AO BUSCAR OCORRÊNCIAS:', error);
-    } finally {
-      setLoading(false);
+      setError(null);
+      try {
+        const data = await getOccurrences();
+        if (active) setOccurrences(data);
+      } catch (error) {
+        if (active) setError(error instanceof Error ? error.message : 'Falha ao carregar ocorrências.');
+      } finally {
+        if (active) setLoading(false);
+      }
     }
-  }
-
-  useEffect(() => {
-    loadOccurrences();
-  }, []);
+    void loadOccurrences();
+    return () => { active = false; };
+  }, [attempt]));
 
   function getStatusStyle(status: string) {
     if (status === 'Resolvida') {
@@ -61,6 +63,14 @@ export default function OccurrencesScreen() {
           <Text style={styles.loadingText}>
             Carregando ocorrências...
           </Text>
+        </View>
+      ) : error ? (
+        <View style={styles.emptyContainer}>
+          <Text style={styles.emptyTitle}>Não foi possível carregar as ocorrências</Text>
+          <Text style={styles.emptyText}>{error}</Text>
+          <TouchableOpacity style={styles.backButton} onPress={() => setAttempt(value => value + 1)}>
+            <Text style={styles.backText}>Tentar novamente</Text>
+          </TouchableOpacity>
         </View>
       ) : occurrences.length === 0 ? (
         <View style={styles.emptyContainer}>

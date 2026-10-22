@@ -87,3 +87,6 @@ Thumbs.db
 # Local tool settings and credentials
 .claude/settings.local.json
 .aws/
+
+# Local occurrence images (preserve separately from source control)
+/backend/uploads/

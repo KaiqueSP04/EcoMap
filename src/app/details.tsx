@@ -1,9 +1,12 @@
 import { getOccurrences } from '@/services/occurrences';
+import { getPhotoUrl } from '@/services/photos';
 import type { Occurrence } from '@/types/occurrence';
-import { router, useLocalSearchParams } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
+import { useCallback, useState } from 'react';
 import {
   ActivityIndicator,
+  Image,
+  ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -17,26 +20,34 @@ export default function DetailsScreen() {
     useState<Occurrence | null>(null);
 
   const [loading, setLoading] = useState(true);
+  const [photoFailed, setPhotoFailed] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
 
-  async function loadOccurrence() {
-    try {
-      const data = await getOccurrences();
-
-      const selectedOccurrence = data.find(
-        (item) => item.id === Number(id)
-      );
-
-      setOccurrence(selectedOccurrence || null);
-    } catch (error) {
-      console.log('ERRO AO BUSCAR OCORRÊNCIA:', error);
-    } finally {
-      setLoading(false);
+  useFocusEffect(useCallback(() => {
+    let active = true;
+    async function loadOccurrence() {
+      setLoading(true);
+      setError(null);
+      setPhotoFailed(false);
+      setOccurrence(null);
+      const selectedId = Number(id);
+      if (typeof id !== 'string' || !Number.isInteger(selectedId) || selectedId <= 0) {
+        setLoading(false);
+        return;
+      }
+      try {
+        const data = await getOccurrences();
+        if (active) setOccurrence(data.find(item => item.id === selectedId) ?? null);
+      } catch (error) {
+        if (active) setError(error instanceof Error ? error.message : 'Falha ao carregar ocorrência.');
+      } finally {
+        if (active) setLoading(false);
+      }
     }
-  }
-
-  useEffect(() => {
-    loadOccurrence();
-  }, [id]);
+    void loadOccurrence();
+    return () => { active = false; };
+  }, [id, attempt]));
 
   if (loading) {
     return (
@@ -50,12 +61,20 @@ export default function DetailsScreen() {
     );
   }
 
-  if (!occurrence) {
+  if (error || !occurrence) {
     return (
       <View style={styles.container}>
         <Text style={styles.title}>
-          Ocorrência não encontrada
+          {error ? 'Não foi possível carregar a ocorrência' : 'Ocorrência não encontrada'}
         </Text>
+        {error && (
+          <>
+            <Text style={styles.errorText}>{error}</Text>
+            <TouchableOpacity style={styles.backButton} onPress={() => setAttempt(value => value + 1)}>
+              <Text style={styles.backText}>Tentar novamente</Text>
+            </TouchableOpacity>
+          </>
+        )}
 
         <TouchableOpacity
           style={styles.backButton}
@@ -70,18 +89,26 @@ export default function DetailsScreen() {
   const isResolved = occurrence.status === 'Resolvida';
 
   return (
-    <View style={styles.container}>
+    <ScrollView style={styles.container} contentContainerStyle={{ paddingBottom: 90 }}>
       <Text style={styles.title}>
         Detalhes da ocorrência
       </Text>
 
-      <View style={styles.imagePlaceholder}>
-        <Text style={styles.imageIcon}>+</Text>
-
-        <Text style={styles.imageText}>
-          Foto da ocorrência
-        </Text>
-      </View>
+      {occurrence.photo_path && !photoFailed ? (
+        <Image
+          source={{ uri: getPhotoUrl(occurrence.photo_path) }}
+          style={styles.photo}
+          resizeMode="cover"
+          onError={() => setPhotoFailed(true)}
+        />
+      ) : (
+        <View style={styles.imagePlaceholder}>
+          <Text style={styles.imageIcon}>+</Text>
+          <Text style={styles.imageText}>
+            {photoFailed ? 'Foto indisponível' : 'Foto da ocorrência'}
+          </Text>
+        </View>
+      )}
 
       <View style={styles.section}>
         <View style={styles.topRow}>
@@ -144,7 +171,9 @@ export default function DetailsScreen() {
           </Text>
 
           <Text style={styles.infoValue}>
-            Não informada
+            {occurrence.latitude != null && occurrence.longitude != null
+              ? `${occurrence.latitude.toFixed(6)}, ${occurrence.longitude.toFixed(6)}`
+              : 'Não informada'}
           </Text>
         </View>
       </View>
@@ -155,11 +184,13 @@ export default function DetailsScreen() {
       >
         <Text style={styles.backText}>Voltar</Text>
       </TouchableOpacity>
-    </View>
+    </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
+  errorText: { color: '#94A3B8', marginBottom: 12 },
+  photo: { width: '100%', height: 190, borderRadius: 14 },
   container: {
     flex: 1,
     backgroundColor: '#0B1220',
