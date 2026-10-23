@@ -1,6 +1,9 @@
+from fastapi import HTTPException
+from sqlalchemy.exc import SQLAlchemyError
+
 from database import SessionLocal
 from models import Occurrence
-from schemas import OccurrenceCreate
+from schemas import OccurrenceCreate, OccurrenceStatusUpdate
 from uploads import resolve_photo_path
 
 
@@ -42,5 +45,22 @@ def create_occurrence(occurrence: OccurrenceCreate):
         db.commit()
         db.refresh(new_occurrence)
         return serialize_occurrence(new_occurrence)
+    finally:
+        db.close()
+
+
+def update_occurrence_status(occurrence_id: int, update: OccurrenceStatusUpdate):
+    db = SessionLocal()
+    try:
+        occurrence = db.get(Occurrence, occurrence_id)
+        if occurrence is None:
+            raise HTTPException(status_code=404, detail="Ocorrência não encontrada.")
+        occurrence.status = update.status
+        db.commit()
+        db.refresh(occurrence)
+        return serialize_occurrence(occurrence)
+    except SQLAlchemyError:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Não foi possível atualizar o status.") from None
     finally:
         db.close()

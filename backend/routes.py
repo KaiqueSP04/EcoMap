@@ -2,7 +2,7 @@ from fastapi import APIRouter, File, UploadFile
 from fastapi.responses import FileResponse
 
 import services
-from schemas import OccurrenceCreate
+from schemas import OccurrenceCreate, OccurrenceStatusUpdate
 from uploads import resolve_photo_path, store_photo
 
 
@@ -22,6 +22,11 @@ def get_occurrences():
 @router.post("/occurrences")
 def create_occurrence(occurrence: OccurrenceCreate):
     return services.create_occurrence(occurrence)
+
+
+@router.patch("/occurrences/{occurrence_id}/status")
+def update_occurrence_status(occurrence_id: int, update: OccurrenceStatusUpdate):
+    return services.update_occurrence_status(occurrence_id, update)
 
 
 @router.post("/uploads", status_code=201)

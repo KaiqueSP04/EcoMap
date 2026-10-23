@@ -1,5 +1,5 @@
 import { requestJson } from '@/services/http';
-import type { Occurrence, OccurrenceCreate, OccurrenceSummary } from '@/types/occurrence';
+import type { Occurrence, OccurrenceCreate, OccurrenceStatus, OccurrenceSummary } from '@/types/occurrence';
 
 export function summarizeOccurrences(occurrences: readonly Occurrence[]): OccurrenceSummary {
   // Registered is the total submitted, including occurrences whose status has changed.
@@ -42,6 +42,21 @@ export async function createOccurrence(
   }, 30000);
   if (!isOccurrence(data)) {
     throw new Error('A API retornou uma ocorrência inválida.');
+  }
+  return data;
+}
+
+export async function updateOccurrenceStatus(
+  id: number,
+  status: OccurrenceStatus
+): Promise<Occurrence> {
+  const data = await requestJson(`/occurrences/${id}/status`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status }),
+  });
+  if (!isOccurrence(data) || data.id !== id || data.status !== status) {
+    throw new Error('A API retornou uma atualização de status inválida. Recarregue os detalhes.');
   }
   return data;
 }

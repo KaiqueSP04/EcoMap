@@ -1,3 +1,7 @@
+export const OCCURRENCE_STATUSES = ['Registrada', 'Em análise', 'Resolvida'] as const;
+
+export type OccurrenceStatus = typeof OCCURRENCE_STATUSES[number];
+
 export type Occurrence = {
   id: number;
   category: string;

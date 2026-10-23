@@ -1,6 +1,14 @@
-from pydantic import BaseModel, Field, field_validator, model_validator
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from uploads import PHOTO_PATH_PATTERN
+
+
+class OccurrenceStatusUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["Registrada", "Em análise", "Resolvida"]
 
 
 class OccurrenceCreate(BaseModel):

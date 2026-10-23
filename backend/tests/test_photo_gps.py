@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 from PIL import Image
 from sqlalchemy import create_engine, text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import declarative_base, sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -25,6 +26,7 @@ database.SessionLocal = sessionmaker(bind=database.engine, autoflush=False)
 sys.modules["database"] = database
 
 import main
+import services
 import uploads
 
 
@@ -194,8 +196,55 @@ class PhotoGpsTests(unittest.TestCase):
             ("/", "get", "200"), ("/occurrences", "get", "200"),
             ("/occurrences", "post", "200"), ("/uploads", "post", "201"),
             ("/uploads/{filename}", "get", "200"),
+            ("/occurrences/{occurrence_id}/status", "patch", "200"),
         ]:
             self.assertIn(code, paths[path][method]["responses"])
+
+    def test_status_update_persists_all_three_values_without_creating_rows(self):
+        original = self.call("GET", "/occurrences")[1][0]
+        for status in ["Em análise", "Resolvida", "Registrada"]:
+            code, updated = self.call("PATCH", "/occurrences/1/status", {"status": status})
+            self.assertEqual(code, 200)
+            self.assertEqual(updated, {**original, "status": status})
+            # GET uses a new session, verifying committed persistence.
+            self.assertEqual(self.call("GET", "/occurrences"), (200, [updated]))
+
+    def test_status_update_preserves_photo_coordinates_and_other_records(self):
+        photo = self.upload()[1]["photo_path"]
+        created = self.call("POST", "/occurrences", {
+            "category": "Tree", "description": "With evidence",
+            "latitude": 0, "longitude": -46, "photo_path": photo,
+        })[1]
+        original = self.call("GET", "/occurrences")[1][0]
+        code, updated = self.call("PATCH", f"/occurrences/{created['id']}/status", {"status": "Resolvida"})
+        self.assertEqual(code, 200)
+        self.assertEqual(updated, {**created, "status": "Resolvida"})
+        self.assertEqual(self.call("GET", "/occurrences")[1], [original, updated])
+
+    def test_invalid_status_and_extra_fields_return_422_without_changes(self):
+        original = self.call("GET", "/occurrences")[1]
+        for body in [{}, {"status": None}, {"status": "invalid"}, {"status": "resolvida"},
+                     {"status": 1}, {"status": "Resolvida", "description": "Changed"}]:
+            with self.subTest(body=body):
+                self.assertEqual(self.call("PATCH", "/occurrences/1/status", body)[0], 422)
+        self.assertEqual(self.call("GET", "/occurrences")[1], original)
+
+    def test_missing_status_target_returns_404_without_creating_row(self):
+        original = self.call("GET", "/occurrences")[1]
+        self.assertEqual(self.call("PATCH", "/occurrences/999/status", {"status": "Resolvida"})[0], 404)
+        self.assertEqual(self.call("GET", "/occurrences")[1], original)
+
+    def test_status_commit_failure_rolls_back_and_closes_session(self):
+        original = self.call("GET", "/occurrences")[1]
+        session = database.SessionLocal()
+        with patch.object(services, "SessionLocal", return_value=session), \
+             patch.object(session, "commit", side_effect=SQLAlchemyError("simulated")), \
+             patch.object(session, "rollback", wraps=session.rollback) as rollback, \
+             patch.object(session, "close", wraps=session.close) as close:
+            self.assertEqual(self.call("PATCH", "/occurrences/1/status", {"status": "Resolvida"})[0], 500)
+            rollback.assert_called_once()
+            close.assert_called_once()
+        self.assertEqual(self.call("GET", "/occurrences")[1], original)
 
 
 if __name__ == "__main__":

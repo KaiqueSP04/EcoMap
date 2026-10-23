@@ -25,6 +25,147 @@ function load(relativePath, imports = {}, globals = {}) {
   return sandbox.exports;
 }
 const config = load('src/config/api.ts');
+
+test('status PATCH sends only status and validates the confirmed occurrence', async () => {
+  const api = services(async (url, options) => {
+    assert.equal(url, config.API_BASE_URL + '/occurrences/2/status');
+    assert.equal(options.method, 'PATCH');
+    assert.equal(options.headers['Content-Type'], 'application/json');
+    assert.deepEqual(JSON.parse(options.body), { status: 'Em análise' });
+    return response({ ...row, status: 'Em análise' });
+  }).occurrences;
+  assert.equal((await api.updateOccurrenceStatus(2, 'Em análise')).status, 'Em análise');
+  for (const invalid of [{ ...row, id: 3, status: 'Resolvida' }, row]) {
+    const invalidApi = services(async () => response(invalid)).occurrences;
+    await assert.rejects(invalidApi.updateOccurrenceStatus(2, 'Resolvida'), /atualização de status inválida/);
+  }
+});
+
+test('status PATCH propagates network, missing-ID and invalid-status failures', async () => {
+  await assert.rejects(
+    services(async () => { throw new TypeError('offline'); }).occurrences.updateOccurrenceStatus(2, 'Resolvida'),
+    /conectar à API/
+  );
+  for (const code of [404, 422, 500]) {
+    await assert.rejects(
+      services(async () => response({}, code)).occurrences.updateOccurrenceStatus(2, 'Resolvida'),
+      new RegExp('HTTP ' + code)
+    );
+  }
+});
+
+function textsEqualTo(screen, text) {
+  return screen.nodes().filter(node => node.type === 'Text' && node.props.children === text).length;
+}
+
+test('details confirms status only after success and blocks duplicate saves synchronously', async () => {
+  let finish, calls = 0;
+  const screen = screenHarness('src/app/details.tsx', {
+    getOccurrences: async () => [row],
+    updateOccurrenceStatus: async (id, status) => {
+      calls++;
+      assert.equal(id, 2);
+      assert.equal(status, 'Resolvida');
+      return new Promise(resolve => { finish = resolve; });
+    },
+  }, {}, { id: '2' });
+  await screen.settle();
+  assert.equal(textsEqualTo(screen, 'Registrada'), 3);
+  await screen.press('Resolvida');
+  await screen.settle();
+  assert.equal(textsEqualTo(screen, 'Registrada'), 3);
+  const save = screen.nodes().find(node => node.type === 'TouchableOpacity' && screen.text(node).includes('Salvar status'));
+  const pending = save.props.onPress();
+  await save.props.onPress(); // Invoke the stale handler too, before React rerenders.
+  await screen.settle();
+  assert.equal(calls, 1);
+  assert.match(screen.text(), /Salvando/);
+  assert.equal(textsEqualTo(screen, 'Registrada'), 3);
+  assert.ok(screen.nodes().filter(node => node.props.accessibilityRole === 'radio').every(node => node.props.disabled));
+  finish({ ...row, status: 'Resolvida' });
+  await pending;
+  await screen.settle();
+  assert.equal(textsEqualTo(screen, 'Resolvida'), 3);
+  assert.match(screen.text(), /Status atualizado com sucesso/);
+});
+
+test('details preserves confirmed status after failed save and permits retry', async () => {
+  let failed = true, calls = 0;
+  const screen = screenHarness('src/app/details.tsx', {
+    getOccurrences: async () => [row],
+    updateOccurrenceStatus: async (_, status) => {
+      calls++;
+      if (failed) throw new Error('Connection failed');
+      return { ...row, status };
+    },
+  }, {}, { id: '2' });
+  await screen.settle();
+  await screen.press('Em análise');
+  await screen.settle();
+  await screen.press('Salvar status');
+  await screen.settle();
+  assert.match(screen.text(), /Connection failed/);
+  assert.equal(textsEqualTo(screen, 'Registrada'), 3);
+  assert.equal(textsEqualTo(screen, 'Em análise'), 1); // Draft option, not confirmed badge/info.
+  failed = false;
+  await screen.press('Salvar status');
+  await screen.settle();
+  assert.equal(calls, 2);
+  assert.equal(textsEqualTo(screen, 'Em análise'), 3);
+  assert.match(screen.text(), /sucesso/);
+});
+
+test('saved status appears on details/list/home focus and preserves photo/GPS', async () => {
+  let stored = { ...row, latitude: 0, longitude: -46, photo_path: photoPath };
+  const api = services(async (url, options) => {
+    if (options.method === 'PATCH') {
+      assert.equal(url, config.API_BASE_URL + '/occurrences/2/status');
+      stored = { ...stored, status: JSON.parse(options.body).status };
+      return response(stored);
+    }
+    return response([stored]);
+  }).occurrences;
+  const home = screenHarness('src/app/index.tsx', api);
+  const list = screenHarness('src/app/occurrences.tsx', api);
+  await home.settle();
+  await list.settle();
+  assert.deepEqual(summaryValues(home), [1, 0, 0]);
+  const details = screenHarness('src/app/details.tsx', api, {}, { id: '2' });
+  await details.settle();
+  await details.press('Em análise');
+  await details.settle();
+  await details.press('Salvar status');
+  await details.settle();
+  assert.equal(details.nodes().find(node => node.type === 'Image').props.source.uri, config.API_BASE_URL + photoPath);
+  assert.match(details.text(), /0.000000, -46.000000/);
+  await home.refocus();
+  await list.refocus();
+  assert.deepEqual(summaryValues(home), [1, 1, 0]);
+  assert.match(list.text(), /Em análise/);
+  const reopened = screenHarness('src/app/details.tsx', api, {}, { id: '2' });
+  await reopened.settle();
+  assert.equal(textsEqualTo(reopened, 'Em análise'), 3);
+});
+
+test('late save response cannot overwrite details loaded in a later focus', async () => {
+  let finish;
+  const screen = screenHarness('src/app/details.tsx', {
+    getOccurrences: async () => [row],
+    updateOccurrenceStatus: () => new Promise(resolve => { finish = resolve; }),
+  }, {}, { id: '2' });
+  await screen.settle();
+  await screen.press('Resolvida');
+  await screen.settle();
+  const save = screen.nodes().find(node => node.type === 'TouchableOpacity' && screen.text(node).includes('Salvar status'));
+  const pending = save.props.onPress();
+  screen.blur();
+  await screen.refocus();
+  finish({ ...row, status: 'Resolvida' });
+  await pending;
+  await screen.settle();
+  assert.equal(textsEqualTo(screen, 'Registrada'), 3);
+  assert.doesNotMatch(screen.text(), /Status atualizado com sucesso/);
+});
 const blobUtils = load('node_modules/expo/src/utils/blobUtils.ts');
 const converter = load('node_modules/expo/src/winter/fetch/convertFormData.ts', {
   '../../utils/blobUtils': blobUtils,
@@ -245,6 +386,11 @@ function screenHarness(file, source, extras = {}, params = {}) {
       return [state[index], value => { state[index] = typeof value === 'function' ? value(state[index]) : value; }];
     },
     useCallback(callback, dependencies) { callback.dependencies = dependencies; return callback; },
+    useRef(initial) {
+      const index = cursor++;
+      if (!(index in state)) state[index] = { current: initial };
+      return state[index];
+    },
   };
   const router = {
     router: { back() {}, push() {} },
@@ -259,6 +405,7 @@ function screenHarness(file, source, extras = {}, params = {}) {
   const Screen = load(file, {
     react, 'react-native': native, 'react/jsx-runtime': { jsx, jsxs: jsx, Fragment: 'Fragment' },
     'expo-router': router, '@/services/occurrences': source,
+    '@/types/occurrence': load('src/types/occurrence.ts'),
     '@/services/photos': { getPhotoUrl: p => config.API_BASE_URL + p, ...extras.photos },
     '@/hooks/use-occurrence-evidence': { useOccurrenceEvidence: () => extras.evidence },
   }).default;
