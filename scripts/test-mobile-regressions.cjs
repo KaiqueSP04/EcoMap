@@ -58,6 +58,69 @@ function emptyEvidence() {
     removePhoto() {}, removeLocation() {}, locate() {}, selectPhoto() {} };
 }
 
+function selectedCategories(screen) {
+  return screen.nodes().filter(node => node.type === 'TouchableOpacity'
+    && ['Calçada', 'Árvore', 'Área verde'].includes(screen.text(node))
+    && node.props.style.backgroundColor === '#172A4A').map(node => screen.text(node));
+}
+
+test('registration starts without category, blocks sending without losing evidence and resets category after success', async () => {
+  let calls = 0, uploads = 0, message;
+  const evidence = { ...emptyEvidence(), photo: { uri: 'file:///photo.jpg', name: 'photo.jpg' },
+    coordinates: { latitude: 0, longitude: -46 } };
+  const screen = screenHarness('src/app/register.tsx', {
+    createOccurrence: async data => { calls++; return { ...row, ...data }; },
+  }, {
+    evidence, photos: { uploadPhoto: async () => { uploads++; return photoPath; } },
+    alerts: { alert: (_, text) => { message = text; } },
+  });
+  screen.render();
+  assert.deepEqual(selectedCategories(screen), []);
+  assert.match(screen.text(), /Categoria \(obrigatória\)/);
+  screen.nodes().find(node => node.type === 'TextInput').props.onChangeText('Descrição preenchida');
+  await screen.settle();
+  await screen.press('Registrar ocorrência');
+  await screen.settle();
+  assert.equal(calls, 0);
+  assert.equal(uploads, 0);
+  assert.equal(message, 'Selecione uma categoria para registrar a ocorrência');
+  assert.equal(screen.nodes().find(node => node.type === 'TextInput').props.value, 'Descrição preenchida');
+  assert.equal(screen.nodes().find(node => node.type === 'Image').props.source.uri, evidence.photo.uri);
+  assert.match(screen.text(), /0\.000000\s*,\s*-46\.000000/);
+  await screen.press('Área verde');
+  await screen.settle();
+  assert.deepEqual(selectedCategories(screen), ['Área verde']);
+  await screen.press('Registrar ocorrência');
+  await screen.settle();
+  assert.equal(calls, 1);
+  assert.deepEqual(selectedCategories(screen), []);
+  await screen.refocus();
+  assert.deepEqual(selectedCategories(screen), []);
+});
+
+test('AI category preview and ignore preserve empty selection; only accepting selects a category', async () => {
+  for (const accept of [true, false]) {
+    let payload;
+    const screen = screenHarness('src/app/register.tsx', {
+      createOccurrence: async data => { payload = data; return { ...row, ...data }; },
+    }, {
+      evidence: emptyEvidence(),
+      categories: { suggestCategory: async () => ({ category: 'Árvore', message: 'Revise.' }) },
+    });
+    screen.render();
+    screen.nodes().find(node => node.type === 'TextInput').props.onChangeText('Galho quebrado');
+    await screen.settle();
+    await screen.press('Sugerir categoria com IA');
+    await screen.settle();
+    assert.deepEqual(selectedCategories(screen), []);
+    await screen.press(accept ? 'Usar sugestão' : 'Ignorar');
+    await screen.settle();
+    assert.deepEqual(selectedCategories(screen), accept ? ['Árvore'] : []);
+    await screen.press('Registrar ocorrência');
+    assert.equal(payload?.category, accept ? 'Árvore' : undefined);
+  }
+});
+
 test('AI suggestion never changes category until explicitly accepted; ignore preserves manual choice', async () => {
   for (const accept of [true, false]) {
     let payload;

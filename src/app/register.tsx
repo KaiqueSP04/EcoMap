@@ -20,7 +20,7 @@ import {
 } from 'react-native';
 
 export default function RegisterScreen() {
-  const [category, setCategory] = useState('Calçada');
+  const [category, setCategory] = useState('');
   const [description, setDescription] = useState('');
   const [loading, setLoading] = useState(false);
   const [uploadedPhoto, setUploadedPhoto] = useState<{ uri: string; path: string } | null>(null);
@@ -127,7 +127,7 @@ export default function RegisterScreen() {
   async function handleRegister() {
     if (busy || registering.current) return;
     if (!category.trim()) {
-      Alert.alert('Categoria obrigatória', 'Selecione uma categoria.');
+      Alert.alert('Categoria obrigatória', 'Selecione uma categoria para registrar a ocorrência');
       return;
     }
     if (!description.trim()) {
@@ -170,6 +170,7 @@ export default function RegisterScreen() {
       );
 
       changeDescription('');
+      setCategory('');
       evidence.removePhoto();
       evidence.removeLocation();
       setUploadedPhoto(null);
@@ -194,7 +195,7 @@ export default function RegisterScreen() {
         Informe os dados da ocorrência encontrada.
       </Text>
 
-      <Text style={styles.label}>Categoria</Text>
+      <Text style={styles.label}>Categoria (obrigatória)</Text>
 
       <View style={styles.options}>
         <TouchableOpacity
