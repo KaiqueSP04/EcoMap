@@ -26,6 +26,133 @@ function load(relativePath, imports = {}, globals = {}) {
 }
 const config = load('src/config/api.ts');
 
+test('AI service sends only description and rejects invalid or inconsistent categories', async () => {
+  const http = load('src/services/http.ts', {
+    '@/config/api': config,
+    'expo/fetch': { fetch: async (url, options) => {
+      assert.equal(url, config.API_BASE_URL + '/occurrences/suggest-category');
+      assert.equal(options.method, 'POST');
+      assert.deepEqual(JSON.parse(options.body), { description: 'Galho quebrado na árvore' });
+      return response({ category: 'Árvore', reason: 'suggested', message: 'Sugestão disponível.' });
+    } },
+  });
+  const categories = load('src/services/categories.ts', {
+    '@/services/http': http, '@/types/occurrence': load('src/types/occurrence.ts'),
+  });
+  assert.equal((await categories.suggestCategory('Galho quebrado na árvore')).category, 'Árvore');
+  for (const invalid of [
+    { category: 'Lixo', reason: 'suggested', message: 'bad' },
+    { category: 'Árvore', reason: 'unavailable', message: 'bad' },
+    { category: null, reason: 'suggested', message: 'bad' },
+  ]) {
+    const api = load('src/services/categories.ts', {
+      '@/services/http': { requestJson: async () => invalid },
+      '@/types/occurrence': load('src/types/occurrence.ts'),
+    });
+    await assert.rejects(api.suggestCategory('Descrição'), /sugestão inválida/);
+  }
+});
+
+function emptyEvidence() {
+  return { photo: null, coordinates: null, locating: false, selectingPhoto: false,
+    removePhoto() {}, removeLocation() {}, locate() {}, selectPhoto() {} };
+}
+
+test('AI suggestion never changes category until explicitly accepted; ignore preserves manual choice', async () => {
+  for (const accept of [true, false]) {
+    let payload;
+    const screen = screenHarness('src/app/register.tsx', {
+      createOccurrence: async data => { payload = data; return { ...row, ...data }; },
+    }, {
+      evidence: emptyEvidence(),
+      categories: { suggestCategory: async () => ({ category: 'Árvore', message: 'Sugestão disponível.' }) },
+    });
+    screen.render();
+    await screen.press('Calçada');
+    screen.nodes().find(node => node.type === 'TextInput').props.onChangeText('Galho quebrado');
+    await screen.settle();
+    await screen.press('Sugerir categoria com IA');
+    await screen.settle();
+    assert.match(screen.text(), /Sugestão: Árvore/);
+    // The explicitly selected manual category remains unchanged before accept.
+    const manual = screen.nodes().find(node => node.type === 'TouchableOpacity' && screen.text(node) === 'Calçada');
+    assert.equal(manual.props.style.backgroundColor, '#172A4A');
+    await screen.press(accept ? 'Usar sugestão' : 'Ignorar');
+    await screen.settle();
+    await screen.press('Registrar ocorrência');
+    assert.equal(payload.category, accept ? 'Árvore' : 'Calçada');
+  }
+});
+
+test('AI fallback and network failure leave manual registration available', async () => {
+  for (const failure of ['network', 'unavailable', 'timeout', 'rate_limited', 'invalid_response', 'not_classified']) {
+    let registered = false;
+    const screen = screenHarness('src/app/register.tsx', {
+      createOccurrence: async data => { registered = true; return { ...row, ...data }; },
+    }, {
+      evidence: emptyEvidence(),
+      categories: { suggestCategory: async () => {
+        if (failure === 'network') throw new Error('Falha na IA');
+        return { category: null, message: 'Escolha manualmente: ' + failure };
+      } },
+    });
+    screen.render();
+    await screen.press('Calçada');
+    screen.nodes().find(node => node.type === 'TextInput').props.onChangeText('Problema ambiental');
+    await screen.settle();
+    await screen.press('Sugerir categoria com IA');
+    await screen.settle();
+    assert.match(screen.text(), failure === 'network' ? /cadastro manual/ : /Escolha manualmente/);
+    await screen.press('Registrar ocorrência');
+    assert.equal(registered, true);
+  }
+});
+
+test('editing description discards late AI results and duplicate requests are blocked', async () => {
+  let finish, calls = 0;
+  const screen = screenHarness('src/app/register.tsx', {}, {
+    evidence: emptyEvidence(),
+    categories: { suggestCategory: () => { calls++; return new Promise(resolve => { finish = resolve; }); } },
+  });
+  screen.render();
+  screen.nodes().find(node => node.type === 'TextInput').props.onChangeText('Árvore quebrada');
+  await screen.settle();
+  const button = screen.nodes().find(node => node.type === 'TouchableOpacity' && screen.text(node).includes('Sugerir categoria com IA'));
+  const pending = button.props.onPress();
+  await button.props.onPress();
+  await screen.settle();
+  assert.match(screen.text(), /Consultando IA/);
+  assert.equal(calls, 1);
+  screen.nodes().find(node => node.type === 'TextInput').props.onChangeText('Calçada danificada');
+  finish({ category: 'Árvore', message: 'old suggestion' });
+  await pending;
+  await screen.settle();
+  assert.doesNotMatch(screen.text(), /Sugestão: Árvore/);
+});
+
+test('manual submission can finish while optional AI is pending and ignores its late answer', async () => {
+  let finish, payload;
+  const screen = screenHarness('src/app/register.tsx', {
+    createOccurrence: async data => { payload = data; return { ...row, ...data }; },
+  }, {
+    evidence: emptyEvidence(),
+    categories: { suggestCategory: () => new Promise(resolve => { finish = resolve; }) },
+  });
+  screen.render();
+  await screen.press('Calçada');
+  screen.nodes().find(node => node.type === 'TextInput').props.onChangeText('Praça abandonada');
+  await screen.settle();
+  const button = screen.nodes().find(node => node.type === 'TouchableOpacity' && screen.text(node).includes('Sugerir categoria com IA'));
+  const pending = button.props.onPress();
+  await screen.settle();
+  await screen.press('Registrar ocorrência');
+  assert.equal(payload.category, 'Calçada');
+  finish({ category: 'Área verde', message: 'late' });
+  await pending;
+  await screen.settle();
+  assert.doesNotMatch(screen.text(), /Sugestão: Área verde/);
+});
+
 test('status PATCH sends only status and validates the confirmed occurrence', async () => {
   const api = services(async (url, options) => {
     assert.equal(url, config.API_BASE_URL + '/occurrences/2/status');
@@ -189,7 +316,7 @@ function services(fetchImpl, FileImpl = class {}) {
   };
 }
 
-test('SDK 57 reproduces the original URI descriptor error', async () => {
+test('installed Expo SDK rejects the original unsupported URI descriptor', async () => {
   const form = new ExpoFormData();
   form.append('file', { uri: 'file:///photo.png', name: 'photo.png', type: 'image/png' });
   await assert.rejects(converter.convertFormDataAsync(form), /Unsupported FormDataPart implementation/);
@@ -378,7 +505,7 @@ function screenHarness(file, source, extras = {}, params = {}) {
   const jsx = (type, props) => ({ type, props });
   const native = Object.fromEntries(['View', 'Text', 'TouchableOpacity', 'ScrollView', 'Image', 'TextInput', 'ActivityIndicator'].map(name => [name, name]));
   native.StyleSheet = { create: value => value };
-  native.Alert = { alert() {} };
+  native.Alert = extras.alerts ?? { alert() {} };
   const react = {
     useState(initial) {
       const index = cursor++;
@@ -405,6 +532,8 @@ function screenHarness(file, source, extras = {}, params = {}) {
   const Screen = load(file, {
     react, 'react-native': native, 'react/jsx-runtime': { jsx, jsxs: jsx, Fragment: 'Fragment' },
     'expo-router': router, '@/services/occurrences': source,
+    '@/services/categories': extras.categories ?? {},
+    '@/services/descriptions': extras.descriptions ?? {},
     '@/types/occurrence': load('src/types/occurrence.ts'),
     '@/services/photos': { getPhotoUrl: p => config.API_BASE_URL + p, ...extras.photos },
     '@/hooks/use-occurrence-evidence': { useOccurrenceEvidence: () => extras.evidence },
@@ -496,6 +625,7 @@ test('registration without photo skips upload; with photo/GPS uses persistent up
       createOccurrence: async data => { payload = data; return { ...row, ...data }; },
     }, { evidence, photos: { uploadPhoto: async () => { uploads++; return photoPath; } } });
     screen.render();
+    await screen.press('Calçada');
     screen.nodes().find(node => node.type === 'TextInput').props.onChangeText('New test');
     await screen.settle();
     await screen.press('Registrar ocorrência');
@@ -510,4 +640,177 @@ test('registration without photo skips upload; with photo/GPS uses persistent up
       assert.equal(payload.latitude, undefined);
     }
   }
+});
+
+test('description services use centralized API, real multipart and validate provider responses', async () => {
+  const api = services(async (url, options) => {
+    if (url.endsWith('/describe-image')) {
+      assert.equal(url, config.API_BASE_URL + '/occurrences/describe-image');
+      const encoded = await converter.convertFormDataAsync(options.body);
+      assert.ok(encoded);
+      assert.equal(options.body.get('file').size, 3);
+    } else {
+      assert.equal(url, config.API_BASE_URL + '/occurrences/improve-description');
+      assert.deepEqual(JSON.parse(options.body), { description: 'Galho caido.' });
+    }
+    return response({ description: 'Galho caído.', reason: 'suggested', message: 'Revise.' });
+  });
+  const descriptions = load('src/services/descriptions.ts', {
+    '@/services/http': api.http, '@/services/photos': api.photos,
+  });
+  assert.equal((await descriptions.describePhoto({ file: new Blob(['abc']), name: 'photo.jpg' })).description, 'Galho caído.');
+  assert.equal((await descriptions.improveDescription('Galho caido.')).description, 'Galho caído.');
+  for (const data of [{ description: 1 }, { description: 'x'.repeat(601), reason: 'suggested', message: 'x' },
+    { description: null, reason: 'suggested', message: 'x' }, { description: 'x', reason: 'timeout', message: 'x' }]) {
+    const invalid = load('src/services/descriptions.ts', {
+      '@/services/http': { requestJson: async () => data }, '@/services/photos': {},
+    });
+    await assert.rejects(invalid.improveDescription('x'), /inválida/);
+  }
+});
+
+test('text improvement preview requires acceptance and remains editable; ignoring preserves original', async () => {
+  for (const accept of [false, true]) {
+    const screen = screenHarness('src/app/register.tsx', {}, {
+      evidence: emptyEvidence(), descriptions: {
+        improveDescription: async () => ({ description: 'Galho caído.', message: 'Revise.' }),
+      },
+    });
+    screen.render();
+    const input = () => screen.nodes().find(node => node.type === 'TextInput');
+    input().props.onChangeText('Galho caido');
+    await screen.settle();
+    await screen.press('Melhorar texto com IA');
+    await screen.settle();
+    assert.equal(input().props.value, 'Galho caido');
+    assert.match(screen.text(), /Galho caído/);
+    await screen.press(accept ? 'Usar descrição' : 'Ignorar descrição');
+    await screen.settle();
+    assert.equal(input().props.value, accept ? 'Galho caído.' : 'Galho caido');
+    input().props.onChangeText('Texto revisado manualmente');
+    await screen.settle();
+    assert.equal(input().props.value, 'Texto revisado manualmente');
+    assert.equal(input().props.editable, true);
+  }
+});
+
+test('photo description sends nothing until explicit Google confirmation; cancel and stale consent do not send', async () => {
+  const evidence = { ...emptyEvidence(), photo: { uri: 'file:///a.jpg', name: 'a.jpg' } };
+  let buttons, calls = 0;
+  const screen = screenHarness('src/app/register.tsx', {}, {
+    evidence, alerts: { alert(title, message, actions) {
+      assert.match(message, /Google/); assert.match(message, /conteúdo visível/); buttons = actions;
+    } },
+    descriptions: { describePhoto: async () => { calls++; return { description: 'Galho sobre o passeio.', message: 'Revise.' }; } },
+  });
+  await screen.settle();
+  await screen.press('Gerar descrição com IA');
+  assert.equal(calls, 0);
+  assert.equal(buttons[0].text, 'Cancelar');
+  await screen.press('Remover foto');
+  buttons[1].onPress();
+  await screen.settle();
+  assert.equal(calls, 0);
+  await screen.press('Gerar descrição com IA');
+  buttons[1].onPress();
+  await screen.settle();
+  assert.equal(calls, 1);
+  assert.equal(screen.nodes().find(node => node.type === 'TextInput').props.value, '');
+  await screen.press('Usar descrição');
+  await screen.settle();
+  assert.equal(screen.nodes().find(node => node.type === 'TextInput').props.value, 'Galho sobre o passeio.');
+});
+
+test('editing text, replacing/removing photo and leaving screen discard late description suggestions', async () => {
+  for (const action of ['edit', 'replace', 'remove', 'blur']) {
+    let resolve, calls = 0;
+    const evidence = { ...emptyEvidence(), photo: { uri: 'file:///a.jpg', name: 'a.jpg' },
+      selectPhoto: async () => { evidence.photo = { uri: 'file:///b.jpg', name: 'b.jpg' }; },
+      removePhoto: () => { evidence.photo = null; },
+    };
+    let confirm;
+    const screen = screenHarness('src/app/register.tsx', {}, {
+      evidence, alerts: { alert: (_, __, buttons) => { confirm = buttons[1].onPress; } },
+      descriptions: { describePhoto: () => { calls++; return new Promise(done => { resolve = done; }); } },
+    });
+    await screen.settle();
+    await screen.press('Gerar descrição com IA');
+    confirm(); confirm();
+    assert.equal(calls, 1);
+    await screen.settle();
+    if (action === 'edit') screen.nodes().find(node => node.type === 'TextInput').props.onChangeText('Manual');
+    if (action === 'replace') await screen.press('Adicionar foto');
+    if (action === 'remove') await screen.press('Remover foto');
+    if (action === 'blur') screen.blur();
+    resolve({ description: 'Sugestão antiga.', message: 'Revise.' });
+    await screen.settle();
+    assert.doesNotMatch(screen.text(), /Sugestão antiga/);
+    assert.equal(screen.nodes().find(node => node.type === 'TextInput').props.value, action === 'edit' ? 'Manual' : '');
+  }
+});
+
+test('failed or unavailable description assistance preserves manual submission; text edits invalidate in-flight improvements', async () => {
+  for (const failure of [true, false]) {
+    let payload;
+    const screen = screenHarness('src/app/register.tsx', {
+      createOccurrence: async value => { payload = value; return { ...row, ...value }; },
+    }, {
+      evidence: emptyEvidence(), descriptions: {
+        improveDescription: async () => {
+          if (failure) throw new Error('Falha de conexão');
+          return { description: null, message: 'IA indisponível' };
+        },
+      },
+    });
+    screen.render();
+    await screen.press('Calçada');
+    screen.nodes().find(node => node.type === 'TextInput').props.onChangeText('Descrição manual');
+    await screen.settle();
+    await screen.press('Melhorar texto com IA');
+    await screen.settle();
+    assert.match(screen.text(), failure ? /Falha de conexão/ : /IA indisponível/);
+    await screen.press('Registrar ocorrência');
+    assert.equal(payload.description, 'Descrição manual');
+  }
+  let finish;
+  const pending = screenHarness('src/app/register.tsx', {}, {
+    evidence: emptyEvidence(), descriptions: { improveDescription: () => new Promise(done => { finish = done; }) },
+  });
+  pending.render();
+  pending.nodes().find(node => node.type === 'TextInput').props.onChangeText('Texto inicial');
+  await pending.settle();
+  const request = pending.press('Melhorar texto com IA');
+  pending.nodes().find(node => node.type === 'TextInput').props.onChangeText('Texto novo');
+  finish({ description: 'Texto antigo melhorado', message: 'Revise.' });
+  await request;
+  await pending.settle();
+  assert.doesNotMatch(pending.text(), /Texto antigo melhorado/);
+});
+
+test('photo network failures allow retry; completed previews are cleared on blur and never register automatically', async () => {
+  let failed = true, consent, registrations = 0;
+  const screen = screenHarness('src/app/register.tsx', {
+    createOccurrence: async () => { registrations++; return row; },
+  }, {
+    evidence: { ...emptyEvidence(), photo: { uri: 'file:///a.jpg', name: 'a.jpg' } },
+    alerts: { alert: (_, __, buttons) => { consent = buttons[1].onPress; } },
+    descriptions: { describePhoto: async () => {
+      if (failed) throw new Error('Falha ao enviar imagem');
+      return { description: 'Galho sobre a calçada.', message: 'Revise.' };
+    } },
+  });
+  await screen.settle();
+  await screen.press('Gerar descrição com IA');
+  consent();
+  await screen.settle();
+  assert.match(screen.text(), /Falha ao enviar imagem/);
+  failed = false;
+  await screen.press('Gerar descrição com IA');
+  consent();
+  await screen.settle();
+  assert.match(screen.text(), /Galho sobre a calçada/);
+  assert.equal(registrations, 0);
+  screen.blur();
+  await screen.refocus();
+  assert.doesNotMatch(screen.text(), /Galho sobre a calçada/);
 });

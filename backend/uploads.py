@@ -58,26 +58,34 @@ def normalize_image(content: bytes, content_type: str | None) -> bytes:
         raise HTTPException(status_code=415, detail="Imagem inválida ou corrompida.") from None
 
 
-async def store_photo(file: UploadFile) -> dict[str, str]:
+async def read_normalized_photo(file: UploadFile) -> bytes:
     try:
         content = bytearray()
         while chunk := await file.read(64 * 1024):
             content.extend(chunk)
             if len(content) > MAX_IMAGE_BYTES:
                 raise HTTPException(status_code=413, detail="A foto deve ter no máximo 8 MB.")
-        normalized = await run_in_threadpool(normalize_image, bytes(content), file.content_type)
-        UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-        filename = f"{uuid4().hex}.jpg"
-        target = UPLOAD_DIR / filename
-        created = False
-        try:
-            with target.open("xb") as output:
-                created = True
-                output.write(normalized)
-        except OSError:
-            if created:
-                target.unlink(missing_ok=True)
-            raise HTTPException(status_code=500, detail="Não foi possível armazenar a foto.") from None
-        return {"photo_path": f"/uploads/{filename}"}
+        return await run_in_threadpool(normalize_image, bytes(content), file.content_type)
     finally:
         await file.close()
+
+
+async def store_photo(file: UploadFile) -> dict[str, str]:
+    normalized = await read_normalized_photo(file)
+    return await run_in_threadpool(write_photo, normalized)
+
+
+def write_photo(normalized: bytes) -> dict[str, str]:
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    filename = f"{uuid4().hex}.jpg"
+    target = UPLOAD_DIR / filename
+    created = False
+    try:
+        with target.open("xb") as output:
+            created = True
+            output.write(normalized)
+    except OSError:
+        if created:
+            target.unlink(missing_ok=True)
+        raise HTTPException(status_code=500, detail="Não foi possível armazenar a foto.") from None
+    return {"photo_path": f"/uploads/{filename}"}

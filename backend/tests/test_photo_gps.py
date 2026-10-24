@@ -25,9 +25,10 @@ database.SessionLocal = sessionmaker(bind=database.engine, autoflush=False)
 # Prevent importing the real database module, even if DATABASE_URL is set.
 sys.modules["database"] = database
 
-import main
-import services
-import uploads
+with patch("dotenv.load_dotenv"):
+    import main
+    import services
+    import uploads
 
 
 async def request(method, path, body=b"", content_type=None, omit_length=False):

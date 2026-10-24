@@ -1,8 +1,12 @@
 import { createOccurrence } from '@/services/occurrences';
+import { suggestCategory } from '@/services/categories';
+import { describePhoto, improveDescription } from '@/services/descriptions';
+import type { DescriptionSuggestion } from '@/types/description-suggestion';
+import type { CategorySuggestion } from '@/types/occurrence';
 import { uploadPhoto } from '@/services/photos';
 import { useOccurrenceEvidence } from '@/hooks/use-occurrence-evidence';
-import { router } from 'expo-router';
-import { useState } from 'react';
+import { router, useFocusEffect } from 'expo-router';
+import { useCallback, useRef, useState } from 'react';
 import {
   Alert,
   ActivityIndicator,
@@ -22,9 +26,106 @@ export default function RegisterScreen() {
   const [uploadedPhoto, setUploadedPhoto] = useState<{ uri: string; path: string } | null>(null);
   const evidence = useOccurrenceEvidence();
   const busy = loading || evidence.selectingPhoto || evidence.locating;
+  const [suggesting, setSuggesting] = useState(false);
+  const [suggestion, setSuggestion] = useState<CategorySuggestion | null>(null);
+  const [suggestionError, setSuggestionError] = useState<string | null>(null);
+  const suggestionVersion = useRef(0);
+  const suggestionInFlight = useRef(false);
+  const registering = useRef(false);
+  const [assisting, setAssisting] = useState(false);
+  const [descriptionSuggestion, setDescriptionSuggestion] = useState<DescriptionSuggestion | null>(null);
+  const [descriptionError, setDescriptionError] = useState<string | null>(null);
+  const descriptionVersion = useRef(0);
+  const descriptionInFlight = useRef(false);
+
+  useFocusEffect(useCallback(() => {
+    return () => {
+      suggestionVersion.current++;
+      descriptionVersion.current++;
+      setSuggestion(null);
+      setSuggestionError(null);
+      setDescriptionSuggestion(null);
+      setDescriptionError(null);
+    };
+  }, []));
+
+  function changeDescription(value: string) {
+    invalidateDescriptionSuggestion();
+    suggestionVersion.current++;
+    setDescription(value);
+    setSuggestion(null);
+    setSuggestionError(null);
+  }
+
+  function invalidateDescriptionSuggestion() {
+    descriptionVersion.current++;
+    setDescriptionSuggestion(null);
+    setDescriptionError(null);
+  }
+
+  async function selectPhoto(camera: boolean) {
+    invalidateDescriptionSuggestion();
+    await evidence.selectPhoto(camera);
+  }
+
+  async function handleDescriptionSuggestion(fromPhoto: boolean, expectedVersion = descriptionVersion.current) {
+    if (descriptionInFlight.current || suggestionInFlight.current || busy || registering.current
+      || expectedVersion !== descriptionVersion.current
+      || (fromPhoto ? !evidence.photo : !description.trim() || description.length > 2000)) return;
+    descriptionInFlight.current = true;
+    const version = ++descriptionVersion.current;
+    setAssisting(true);
+    setDescriptionSuggestion(null);
+    setDescriptionError(null);
+    try {
+      const result = fromPhoto && evidence.photo
+        ? await describePhoto(evidence.photo)
+        : await improveDescription(description);
+      if (version === descriptionVersion.current) setDescriptionSuggestion(result);
+    } catch (error) {
+      if (version === descriptionVersion.current) {
+        setDescriptionError(error instanceof Error ? error.message : 'Não foi possível consultar a IA.');
+      }
+    } finally {
+      descriptionInFlight.current = false;
+      setAssisting(false);
+    }
+  }
+
+  function confirmImageProcessing() {
+    if (busy || descriptionInFlight.current || suggestionInFlight.current) return;
+    const version = descriptionVersion.current;
+    Alert.alert('Enviar foto ao Google?',
+      'A foto será processada pelo serviço externo Gemini, do Google, para sugerir uma descrição. '
+      + 'Os metadados serão removidos pelo EcoMap; o conteúdo visível da foto será enviado. '
+      + 'Evite fotos com pessoas ou informações pessoais. Deseja continuar?', [
+        { text: 'Cancelar', style: 'cancel' },
+        { text: 'Enviar foto', onPress: () => { void handleDescriptionSuggestion(true, version); } },
+      ]);
+  }
+
+  async function handleSuggestCategory() {
+    if (suggestionInFlight.current || descriptionInFlight.current || busy || !description.trim() || description.length > 2000) return;
+    suggestionInFlight.current = true;
+    const version = ++suggestionVersion.current;
+    setSuggesting(true);
+    setSuggestion(null);
+    setSuggestionError(null);
+    try {
+      const result = await suggestCategory(description);
+      if (version === suggestionVersion.current) setSuggestion(result);
+    } catch (error) {
+      if (version === suggestionVersion.current) {
+        setSuggestionError(error instanceof Error ? error.message : 'Não foi possível consultar a IA.');
+      }
+    } finally {
+      suggestionInFlight.current = false;
+      setSuggesting(false);
+    }
+  }
 
   async function handleRegister() {
-    if (busy) return;
+    if (busy || registering.current) return;
     if (!category.trim()) {
       Alert.alert('Categoria obrigatória', 'Selecione uma categoria.');
       return;
@@ -38,6 +139,9 @@ export default function RegisterScreen() {
     }
 
     try {
+      registering.current = true;
+      suggestionVersion.current++;
+      invalidateDescriptionSuggestion();
       setLoading(true);
 
       let photoPath: string | undefined;
@@ -65,7 +169,7 @@ export default function RegisterScreen() {
         ]
       );
 
-      setDescription('');
+      changeDescription('');
       evidence.removePhoto();
       evidence.removeLocation();
       setUploadedPhoto(null);
@@ -77,6 +181,7 @@ export default function RegisterScreen() {
         String(error)
       );
     } finally {
+      registering.current = false;
       setLoading(false);
     }
   }
@@ -161,13 +266,69 @@ export default function RegisterScreen() {
         placeholderTextColor="#64748B"
         multiline
         value={description}
-        onChangeText={setDescription}
+        onChangeText={changeDescription}
         editable={!loading}
       />
 
+      <TouchableOpacity
+        style={[styles.aiButton, (busy || suggesting || assisting || !description.trim() || description.length > 2000) && styles.submitButtonDisabled]}
+        disabled={busy || suggesting || assisting || !description.trim() || description.length > 2000}
+        onPress={() => handleDescriptionSuggestion(false)}
+      >
+        <Text style={styles.actionTitle}>Melhorar texto com IA</Text>
+      </TouchableOpacity>
+      <Text style={styles.aiHint}>Opcional: o texto será enviado ao Gemini, do Google. Revise a sugestão antes de usar.</Text>
+      {assisting && <View><ActivityIndicator color="#4ADE80" /><Text style={styles.aiHint}>Elaborando descrição...</Text></View>}
+      {descriptionSuggestion && (
+        <View style={styles.aiResult}>
+          <Text style={styles.actionTitle}>{descriptionSuggestion.description ?? descriptionSuggestion.message}</Text>
+          {descriptionSuggestion.description && <>
+            <Text style={styles.aiHint}>{descriptionSuggestion.message}</Text>
+            <View style={styles.aiActions}>
+              <TouchableOpacity disabled={loading} style={styles.aiAction} onPress={() => {
+                if (!registering.current && descriptionSuggestion.description) changeDescription(descriptionSuggestion.description);
+              }}><Text style={styles.aiAccept}>Usar descrição</Text></TouchableOpacity>
+              <TouchableOpacity disabled={loading} style={styles.aiAction} onPress={invalidateDescriptionSuggestion}>
+                <Text style={styles.backText}>Ignorar descrição</Text>
+              </TouchableOpacity>
+            </View>
+          </>}
+        </View>
+      )}
+      {descriptionError && <Text style={styles.aiError}>{descriptionError} Você pode continuar o cadastro manual.</Text>}
+
+      <TouchableOpacity
+        style={[styles.aiButton, (busy || suggesting || !description.trim() || description.length > 2000) && styles.submitButtonDisabled]}
+        disabled={busy || suggesting || assisting || !description.trim() || description.length > 2000}
+        onPress={handleSuggestCategory}
+      >
+        {suggesting && <ActivityIndicator color="#4ADE80" />}
+        <Text style={styles.actionTitle}>{suggesting ? 'Consultando IA...' : 'Sugerir categoria com IA'}</Text>
+      </TouchableOpacity>
+      <Text style={styles.aiHint}>Opcional: somente a descrição será enviada à IA. Você decide se aceita.</Text>
+      {description.length > 2000 && <Text style={styles.aiHint}>A IA aceita até 2.000 caracteres. O cadastro manual continua disponível.</Text>}
+      {suggestion && (
+        <View style={styles.aiResult}>
+          <Text style={styles.actionTitle}>{suggestion.category ? `Sugestão: ${suggestion.category}` : suggestion.message}</Text>
+          {suggestion.category && (
+            <View style={styles.aiActions}>
+              <TouchableOpacity disabled={loading} style={styles.aiAction} onPress={() => {
+                if (!registering.current && suggestion.category) { setCategory(suggestion.category); setSuggestion(null); }
+              }}>
+                <Text style={styles.aiAccept}>Usar sugestão</Text>
+              </TouchableOpacity>
+              <TouchableOpacity disabled={loading} style={styles.aiAction} onPress={() => setSuggestion(null)}>
+                <Text style={styles.backText}>Ignorar</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+        </View>
+      )}
+      {suggestionError && <Text style={styles.aiError}>{suggestionError} Você pode continuar o cadastro manual.</Text>}
+
       <Text style={styles.label}>Evidências (opcionais)</Text>
 
-      <TouchableOpacity style={styles.actionButton} disabled={busy} onPress={() => evidence.selectPhoto(false)}>
+      <TouchableOpacity style={styles.actionButton} disabled={busy} onPress={() => selectPhoto(false)}>
         <Text style={styles.actionIcon}>+</Text>
 
         <View style={styles.actionContent}>
@@ -179,7 +340,7 @@ export default function RegisterScreen() {
         </View>
       </TouchableOpacity>
 
-      <TouchableOpacity style={styles.actionButton} disabled={busy} onPress={() => evidence.selectPhoto(true)}>
+      <TouchableOpacity style={styles.actionButton} disabled={busy} onPress={() => selectPhoto(true)}>
         <Text style={styles.actionIcon}>+</Text>
         <View style={styles.actionContent}>
           <Text style={styles.actionTitle}>Tirar foto</Text>
@@ -190,8 +351,12 @@ export default function RegisterScreen() {
       {evidence.photo && (
         <View>
           <Image source={{ uri: evidence.photo.uri }} style={styles.photoPreview} resizeMode="cover" />
-          <TouchableOpacity disabled={loading} onPress={evidence.removePhoto} style={styles.removeButton}>
+          <TouchableOpacity disabled={loading} onPress={() => { invalidateDescriptionSuggestion(); evidence.removePhoto(); }} style={styles.removeButton}>
             <Text style={styles.backText}>Remover foto</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.aiButton} disabled={busy || suggesting || assisting} onPress={confirmImageProcessing}>
+            {assisting && <ActivityIndicator color="#4ADE80" />}
+            <Text style={styles.actionTitle}>Gerar descrição com IA</Text>
           </TouchableOpacity>
         </View>
       )}
@@ -246,6 +411,13 @@ export default function RegisterScreen() {
 }
 
 const styles = StyleSheet.create({
+  aiButton: { flexDirection: 'row', gap: 8, justifyContent: 'center', alignItems: 'center', backgroundColor: '#111C2E', borderWidth: 1, borderColor: '#24344D', padding: 14, borderRadius: 12 },
+  aiHint: { color: '#94A3B8', fontSize: 12, marginTop: 8, marginBottom: 12 },
+  aiResult: { backgroundColor: '#111C2E', padding: 12, borderRadius: 12, marginBottom: 14 },
+  aiActions: { flexDirection: 'row', gap: 20 },
+  aiAction: { paddingVertical: 12 },
+  aiAccept: { color: '#4ADE80', fontWeight: '600' },
+  aiError: { color: '#FCA5A5', marginBottom: 14 },
   scrollContent: { paddingBottom: 90 },
   photoPreview: { width: '100%', height: 180, borderRadius: 12, marginTop: 8 },
   removeButton: { paddingVertical: 12, alignItems: 'center' },

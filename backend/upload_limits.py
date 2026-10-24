@@ -11,7 +11,7 @@ class UploadSizeLimit:
         self.app = app
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send):
-        if scope["type"] != "http" or scope["method"] != "POST" or scope["path"] != "/uploads":
+        if scope["type"] != "http" or scope["method"] != "POST" or scope["path"] not in {"/uploads", "/occurrences/describe-image"}:
             await self.app(scope, receive, send)
             return
 

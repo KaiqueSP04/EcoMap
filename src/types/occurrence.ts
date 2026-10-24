@@ -2,6 +2,10 @@ export const OCCURRENCE_STATUSES = ['Registrada', 'Em análise', 'Resolvida'] as
 
 export type OccurrenceStatus = typeof OCCURRENCE_STATUSES[number];
 
+export const OCCURRENCE_CATEGORIES = ['Calçada', 'Árvore', 'Área verde'] as const;
+export type OccurrenceCategory = typeof OCCURRENCE_CATEGORIES[number];
+export type CategorySuggestion = { category: OccurrenceCategory | null; message: string };
+
 export type Occurrence = {
   id: number;
   category: string;

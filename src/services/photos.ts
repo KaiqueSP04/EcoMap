@@ -5,7 +5,7 @@ import type { SelectedPhoto } from '@/types/evidence';
 
 export const MAX_PHOTO_BYTES = 8 * 1024 * 1024;
 
-export async function uploadPhoto(photo: SelectedPhoto): Promise<string> {
+export function createPhotoFormData(photo: SelectedPhoto): FormData {
   const body = new FormData();
   let file: Blob;
   if (photo.file) {
@@ -22,6 +22,11 @@ export async function uploadPhoto(photo: SelectedPhoto): Promise<string> {
   }
   // Expo's multipart encoder reads File.bytes(); URI descriptors are unsupported.
   body.append('file', file, photo.name);
+  return body;
+}
+
+export async function uploadPhoto(photo: SelectedPhoto): Promise<string> {
+  const body = createPhotoFormData(photo);
   const data = await requestJson('/uploads', {
     method: 'POST',
     body,
